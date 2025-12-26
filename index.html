@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>卢曼笔记查看器</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/fuse.js/dist/fuse.min.js"></script>
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+
+    <style>
+        :root {
+            --bg-color: #121212;
+            --card-bg: #1e1e1e;
+            --text-main: #e0e0e0;
+            --text-muted: #a0a0a0;
+            --accent: #bb86fc;
+            --accent-hover: #9965f4;
+            --border: #333;
+            --input-bg: #2d2d2d;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; outline: none; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* 顶部导航 */
+        header {
+            padding: 10px 20px;
+            background-color: var(--card-bg);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            height: 60px;
+            flex-shrink: 0;
+        }
+
+        h1 { font-size: 1.2rem; font-weight: bold; color: var(--accent); margin-right: auto; }
+
+        input#search-input {
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 8px 12px;
+            border-radius: 4px;
+            width: 300px;
+            max-width: 40vw;
+        }
+
+        button {
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        button:hover { background: var(--border); }
+        button.primary { background: var(--accent); color: #000; border: none; font-weight: bold; }
+        button.primary:hover { background: var(--accent-hover); }
+
+        /* 主布局 */
+        main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* 左侧笔记列表 */
+        #notes-container {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            max-width: 50%;
+        }
+
+        /* 右侧图谱 */
+        #graph-container {
+            flex: 1;
+            background-color: #0f0f0f;
+            position: relative;
+        }
+
+        /* 笔记卡片样式 */
+        .note-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 15px;
+            transition: all 0.2s;
+        }
+
+        .note-card.active { border-color: var(--accent); box-shadow: 0 0 10px rgba(187, 134, 252, 0.1); }
+        
+        .note-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .note-title { font-weight: bold; font-size: 1.1rem; color: var(--text-main); }
+        .note-id { font-size: 0.8rem; color: var(--text-muted); font-family: monospace; }
+
+        .note-content {
+            margin-top: 15px;
+            color: #d0d0d0;
+            line-height: 1.6;
+            font-size: 0.95rem;
+            display: none; /* 默认折叠 */
+            border-top: 1px solid #333;
+            padding-top: 10px;
+        }
+        
+        .note-content.expanded { display: block; }
+
+        /* Markdown 样式微调 */
+        .note-content a { color: var(--accent); text-decoration: none; }
+        .note-content a:hover { text-decoration: underline; }
+        .note-content code { background: #333; padding: 2px 4px; border-radius: 3px; font-family: monospace; }
+        .note-content pre { background: #000; padding: 10px; border-radius: 4px; overflow-x: auto; margin: 10px 0; }
+        .note-content blockquote { border-left: 3px solid var(--accent); padding-left: 10px; color: var(--text-muted); margin: 10px 0; }
+        .internal-link { color: var(--accent); cursor: pointer; border-bottom: 1px dashed var(--accent); }
+
+        /* 设置/JSON 弹窗 */
+        #modal {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: none; justify-content: center; align-items: center; z-index: 1000;
+        }
+        #modal.show { display: flex; }
+        
+        .modal-content {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 8px;
+            width: 80%;
+            max-width: 600px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        textarea#json-input {
+            width: 100%; height: 300px;
+            background: #111; color: #0f0;
+            border: 1px solid var(--border);
+            padding: 10px; font-family: monospace; font-size: 12px;
+            resize: vertical;
+        }
+
+        /* 移动端适配 */
+        @media (max-width: 768px) {
+            header { padding: 10px; gap: 10px; }
+            h1 { display: none; } /* 手机上隐藏标题省空间 */
+            input#search-input { flex: 1; width: auto; max-width: none; }
+            
+            main { flex-direction: column-reverse; } /* 手机上图谱在下，或者可以用 tab 切换，这里采用上下布局 */
+            
+            #notes-container { max-width: 100%; height: 60%; border-right: none; border-top: 1px solid var(--border); }
+            #graph-container { height: 40%; flex: none; }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>ZettelView</h1>
+    <input type="text" id="search-input" placeholder="搜索标题或内容 (支持模糊搜索)...">
+    <button onclick="toggleModal()">数据源</button>
+</header>
+
+<main>
+    <section id="notes-container">
+        </section>
+    <section id="graph-container">
+        </section>
+</main>
+
+<div id="modal" class="">
+    <div class="modal-content">
+        <h3>导入数据 (JSON Array)</h3>
+        <p style="font-size: 0.8rem; color: #888;">格式: [{ "id": "1", "title": "...", "content": "...", "links": ["2"] }]</p>
+        <textarea id="json-input"></textarea>
+        <div style="display: flex; gap: 10px; justify-content: flex-end;">
+            <button onclick="toggleModal()">取消</button>
+            <button class="primary" onclick="saveData()">保存并渲染</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- 默认数据 ---
+    const DEFAULT_DATA = [
+        {
+            "id": "1",
+            "title": "欢迎使用卢曼笔记查看器",
+            "content": "这是一个极简的**Zettelkasten**查看工具。\n\n- 支持 Markdown 渲染\n- 支持 [[双向链接]] 跳转\n- 支持 Vis.js 力导向图\n\n点击右上角 '数据源' 粘贴你自己的 JSON。",
+            "links": ["2", "3"]
+        },
+        {
+            "id": "2",
+            "title": "关于双向链接",
+            "content": "在 Markdown 内容中使用 `[[标题]]` 语法，工具会自动将其转换为可点击的链接，跳转到对应标题的卡片。",
+            "links": ["1"]
+        },
+        {
+            "id": "3",
+            "title": "关于图谱视图",
+            "content": "右侧（手机端为底部）的图谱展示了笔记之间的引用关系。\n\n点击图谱节点，会自动滚动到左侧对应的笔记卡片。",
+            "links": ["1"]
+        },
+         {
+            "id": "4",
+            "title": "独立节点示例",
+            "content": "这是一个没有连接的孤立节点。",
+            "links": []
+        }
+    ];
+
+    // --- 全局变量 ---
+    let notesData = [];
+    let fuse;
+    let network;
+    let nodesDataSet, edgesDataSet;
+
+    // --- 初始化 ---
+    window.onload = function() {
+        const stored = localStorage.getItem('zettel_data');
+        if (stored) {
+            try {
+                notesData = JSON.parse(stored);
+            } catch (e) {
+                console.error("Local Storage data corrupted", e);
+                notesData = DEFAULT_DATA;
+            }
+        } else {
+            notesData = DEFAULT_DATA;
+        }
+
+        // 初始化输入框
+        document.getElementById('json-input').value = JSON.stringify(notesData, null, 2);
+
+        // 初始化 Fuse.js
+        initFuse();
+        
+        // 首次渲染
+        renderApp(notesData);
+
+        // 搜索监听
+        document.getElementById('search-input').addEventListener('input', (e) => {
+            handleSearch(e.target.value);
+        });
+    };
+
+    function initFuse() {
+        fuse = new Fuse(notesData, {
+            keys: ['title', 'content'],
+            threshold: 0.4,
+            includeScore: true
+        });
+    }
+
+    // --- 核心渲染逻辑 ---
+    function renderApp(data) {
+        renderList(data);
+        renderGraph(data);
+    }
+
+    // 渲染笔记列表
+    function renderList(data) {
+        const container = document.getElementById('notes-container');
+        container.innerHTML = '';
+
+        if (data.length === 0) {
+            container.innerHTML = '<div style="text-align:center; color:#666; padding:20px;">没有找到相关笔记</div>';
+            return;
+        }
+
+        data.forEach(note => {
+            const card = document.createElement('div');
+            card.className = 'note-card';
+            card.id = `card-${note.id}`;
+            
+            // 处理 [[Link]] 语法
+            // 将 [[Title]] 替换为 <span class="internal-link" onclick="...">Title</span>
+            let parsedContent = marked.parse(note.content || '');
+            parsedContent = parsedContent.replace(/\[\[(.*?)\]\]/g, (match, title) => {
+                // 尝试找到对应标题的ID（简单的查找）
+                const target = notesData.find(n => n.title.toLowerCase() === title.toLowerCase());
+                const targetId = target ? target.id : null;
+                if (targetId) {
+                    return `<span class="internal-link" onclick="focusNote('${targetId}', event)">${title}</span>`;
+                }
+                return `<span style="color:#666;">${title} (未找到)</span>`;
+            });
+
+            card.innerHTML = `
+                <div class="note-header" onclick="toggleNoteContent('${note.id}')">
+                    <span class="note-title">${note.title}</span>
+                    <span class="note-id">#${note.id}</span>
+                </div>
+                <div class="note-content" id="content-${note.id}">
+                    ${parsedContent}
+                </div>
+            `;
+            container.appendChild(card);
+        });
+    }
+
+    // 渲染图谱
+    function renderGraph(data) {
+        const container = document.getElementById('graph-container');
+        
+        // 准备 Vis-network 数据
+        const nodes = data.map(n => ({
+            id: n.id,
+            label: n.title.length > 10 ? n.title.substring(0, 8) + '...' : n.title,
+            title: n.title, // hover 显示全名
+            color: { background: '#1e1e1e', border: '#bb86fc' },
+            font: { color: '#e0e0e0' },
+            shape: 'box'
+        }));
+
+        const edges = [];
+        data.forEach(source => {
+            if (source.links && Array.isArray(source.links)) {
+                source.links.forEach(targetId => {
+                    // 确保目标存在才画线
+                    if (data.find(n => n.id == targetId)) {
+                        edges.push({ from: source.id, to: targetId, color: '#444' });
+                    }
+                });
+            }
+        });
+
+        const graphData = { nodes: nodes, edges: edges };
+        const options = {
+            nodes: {
+                borderWidth: 1,
+                shape: 'box',
+                margin: 10,
+                font: { size: 14 }
+            },
+            edges: {
+                width: 1,
+                arrows: 'to',
+                smooth: { type: 'continuous' }
+            },
+            physics: {
+                stabilization: false,
+                barnesHut: {
+                    gravitationalConstant: -2000,
+                    springConstant: 0.04,
+                    springLength: 95
+                }
+            },
+            interaction: { hover: true }
+        };
+
+        if (network) {
+            network.destroy(); // 销毁旧的防止内存泄漏
+        }
+        
+        network = new vis.Network(container, graphData, options);
+
+        // 图谱点击事件
+        network.on("click", function (params) {
+            if (params.nodes.length > 0) {
+                const nodeId = params.nodes[0];
+                focusNote(nodeId);
+            }
+        });
+    }
+
+    // --- 交互逻辑 ---
+
+    // 搜索处理
+    function handleSearch(query) {
+        if (!query.trim()) {
+            renderList(notesData); // 显示所有
+            return;
+        }
+        
+        const result = fuse.search(query);
+        const filteredData = result.map(r => r.item);
+        renderList(filteredData);
+    }
+
+    // 展开/收起内容
+    function toggleNoteContent(id) {
+        const content = document.getElementById(`content-${id}`);
+        content.classList.toggle('expanded');
+    }
+
+    // 聚焦笔记（来自图谱点击或内部链接）
+    function focusNote(id, event) {
+        if (event) event.stopPropagation(); // 防止冒泡触发卡片折叠
+
+        const card = document.getElementById(`card-${id}`);
+        
+        // 如果当前搜索状态下卡片不在列表里（被过滤了），我们暂时重置搜索
+        if (!card) {
+            document.getElementById('search-input').value = '';
+            renderList(notesData); // 重绘所有
+            setTimeout(() => focusNote(id), 50); // 等待DOM更新后重试
+            return;
+        }
+
+        // 高亮样式
+        document.querySelectorAll('.note-card').forEach(c => c.classList.remove('active'));
+        card.classList.add('active');
+
+        // 展开内容
+        const content = document.getElementById(`content-${id}`);
+        if (!content.classList.contains('expanded')) {
+            content.classList.add('expanded');
+        }
+
+        // 滚动到可见
+        card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+        // 图谱联动高亮
+        network.selectNodes([id]);
+    }
+
+    // --- 数据管理 ---
+
+    function toggleModal() {
+        const modal = document.getElementById('modal');
+        modal.classList.toggle('show');
+    }
+
+    function saveData() {
+        const input = document.getElementById('json-input').value;
+        try {
+            const parsed = JSON.parse(input);
+            if (!Array.isArray(parsed)) throw new Error("数据必须是数组格式");
+            
+            notesData = parsed;
+            localStorage.setItem('zettel_data', JSON.stringify(notesData));
+            
+            // 重置状态
+            initFuse();
+            renderApp(notesData);
+            toggleModal();
+            alert("数据已更新");
+        } catch (e) {
+            alert("JSON 格式错误: " + e.message);
+        }
+    }
+
+</script>
+</body>
+</html>
